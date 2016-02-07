@@ -1,17 +1,22 @@
 import urllib2
+import urllib
 import httplib
 import re
 import pdfminer
 import socket
 import nltk
+import requests
 from time import sleep
 from  more_itertools import unique_everseen
+import bs4
 from bs4 import BeautifulSoup
+from subprocess import check_output
 
 doi_field = re.compile(r'\W*doi:?', re.IGNORECASE)
 doi_reg = re.compile(r'\d+\.\d+\/[A-z0-9]+[A-z0-9\./]+', re.IGNORECASE)
 sub_directory = re.compile(r'\..*/.+', re.IGNORECASE)
 entity_cleaning = re.compile(r'[\W\d]+', re.IGNORECASE)
+grobid_uri = "http://localhost:8080/processHeaderDocument"
 
 terms = ['pubmed', '.gov', '.edu', 'doi', 'abstract', '.pdf']
 with open('journal_domains.csv', 'rb') as f:
@@ -94,6 +99,14 @@ def soupify(url):
     page_html = opener.open(url)
     return BeautifulSoup(page_html, 'html.parser')
 
+def save_pdf(url, fname):
+    opener = urllib2.build_opener(urllib2.HTTPCookieProcessor)
+    opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.9; rv:10.0) Gecko/20100101 Firefox/10.0')]
+    content = opener.open(url).read()
+    with open(fname, 'wb') as f:
+        f.write(content)
+
+
 def is_paper(url, terms):
     # If the link is to a homepage ('http://google.com/')
     # not a subdirectory ('http://google.com/papers')
@@ -131,40 +144,81 @@ def extract_pubmed_ids(soup):
                     pm_ids.add(text)
     return list(pm_ids)
 
-def process_pdf(url, tries=0):
-    result = {}
-    try:
-        pdf_text = pdf_from_url_to_txt(url, maxpages=3)
-        # Try to extract the doi.
-        result['doi'] = doi_from_pdf(pdf_text)
-        # Save the head of the document.
-        result['head'] = get_pdf_head(pdf_text)
-        result['entities'] = entities_from_pdf(pdf_text)
-    except urllib2.HTTPError:
-        print '!!! Broken Link:\n', url
-        result['broken_link'] = True
-        result['doi'] = []
+# def process_pdf(url, tries=0):
+#     result = {}
+#     try:
+#         pdf_text = pdf_from_url_to_txt(url, maxpages=3)
+#         # Try to extract the doi.
+#         result['doi'] = doi_from_pdf(pdf_text)
+#         # Save the head of the document.
+#         result['head'] = get_pdf_head(pdf_text)
+#         result['entities'] = entities_from_pdf(pdf_text)
+#     except urllib2.HTTPError:
+#         print '!!! Broken Link:\n', url
+#         result['broken_link'] = True
+#         result['doi'] = []
 
-    # This error happens sometimes and retrying works,
-    # So try 3 times (each one second apart) before giving up.
-    except pdfminer.pdfparser.PDFSyntaxError:
-        if tries > 3:
-            print '!!! Unreadable PDF\n', url
-            result['unreadable_pdf'] = True
-            result['doi'] = []
-        else:
-            sleep(1)
-            result.update(process_pdf(url, tries + 1))
-    except httplib.BadStatusLine:
-        print '!!! Bad Status Line\n', url
-        result['unreadable_pdf'] = True
-        result['doi'] = []
-    except:
-        print '!!! Unknown Trouble Reading PDF\n', url
-        result['unreadable_pdf'] = True
-        result['doi'] = []
+#     # This error happens sometimes and retrying works,
+#     # So try 3 times (each one second apart) before giving up.
+#     except pdfminer.pdfparser.PDFSyntaxError:
+#         if tries > 3:
+#             print '!!! Unreadable PDF\n', url
+#             result['unreadable_pdf'] = True
+#             result['doi'] = []
+#         else:
+#             sleep(1)
+#             result.update(process_pdf(url, tries + 1))
+#     except httplib.BadStatusLine:
+#         print '!!! Bad Status Line\n', url
+#         result['unreadable_pdf'] = True
+#         result['doi'] = []
+#     except:
+#         print '!!! Unknown Trouble Reading PDF\n', url
+#         result['unreadable_pdf'] = True
+#         result['doi'] = []
 
+#     return result
+
+def parse_pdf(path):
+    xml = check_output(['curl','-s','--form','input=@'+path, grobid_uri])
+    soup = BeautifulSoup(xml, 'xml')
+    result = {'raw_parse':xml, 'authors':[], 'ids':[(i['type'],i.text.strip()) for i in soup.find_all('idno')]}
+    # Grab the title
+    result['titles'] = [i.text for i in soup.find_all('title', attrs={'type':'main'})]
+    # Grab all the author names and affiliations.
+    for a in soup.find_all('author'):
+        name = ' '.join([n.text.strip() for n in a.find('persName').find_all()])
+        affil = {aff['type']: aff.text.strip() for aff in a.find('affiliation').find_all('orgName')}
+        result['authors'].append((name, affil))
     return result
+
+
+
+
+# def parse_pdf(path):
+#     # call grobid
+#     h = httplib.HTTPConnection('localhost:8080') 
+#     with open(path, 'rb') as f:
+#         data = urllib.urlencode({'input': f})
+#         headers = {"Content-Type":"multipart/form-data"}
+#         h.request('POST', '/processHeaderDocument', data, headers)
+#         #r = requests.post(grobid_uri, headers=headers, params={'input':f.read()})
+#         # if r.status_code == 200:
+#         #     return r.text
+#         # else:
+#         #     print "FAILURE - STATUS CODE: ", r.status_code
+#         #     return None
+#         r = h.getresponse()
+#         return r.read()
+
+
+
+def process_pdf(url, tries=0):
+    fname = url.split('/')[-1]
+    # Save the pdf to the disk
+    save_pdf(url, fname)
+
+
 
 
 def process_media_article(url, tries=0):
