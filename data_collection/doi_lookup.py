@@ -11,7 +11,7 @@ def process_response(resp, data_ex, escape):
         result['error'] = '404'
         return result
     
-    resp = re.sub(escape, r'\1', resp)
+    resp = re.sub(escape, r'\1\2', resp)
     chunks = resp.split('\n\n')
     for c in chunks:
         lines = c.split(';')
@@ -38,7 +38,7 @@ def process_response(resp, data_ex, escape):
     return result
 
 data_ex = re.compile(r'\"([^"]+)\"', re.IGNORECASE)
-escape = re.compile(r';(\w)', re.IGNORECASE)
+escape = re.compile(r'"(.*);(.*)"', re.IGNORECASE)
 fixer = re.compile(r'(10[.][0-9]{4,}(?:[.][0-9]+)*/(?:(?!["&\'<>])\S)+[0-9])', re.IGNORECASE)
 sf = gl.SFrame('fixed_dois')
 dois = sorted(list(set(sf['DOI'])))
