@@ -10,58 +10,17 @@ from time import sleep
 from  more_itertools import unique_everseen
 import bs4
 from bs4 import BeautifulSoup
-from subprocess import check_output
+from subprocess import check_output, call
 
+# Set some re-used values.
 doi_field = re.compile(r'\W*doi:?', re.IGNORECASE)
 doi_reg = re.compile(r'\d+\.\d+\/[A-z0-9]+[A-z0-9\./]+', re.IGNORECASE)
 sub_directory = re.compile(r'\..*/.+', re.IGNORECASE)
 entity_cleaning = re.compile(r'[\W\d]+', re.IGNORECASE)
 grobid_uri = "http://localhost:8080/processHeaderDocument"
-
 terms = ['pubmed', '.gov', '.edu', 'doi', 'abstract', '.pdf']
 with open('journal_domains.csv', 'rb') as f:
     domains = f.read().split('\r\n')[:-1]
-
-## url fixer: url.replace('\\','')
-
-def doi_from_pdf(text):
-    t = text.lower()
-    if 'doi' in t:
-        start = t.index('doi')
-        if '\n' in t[start:]:
-            end = start + t[start:].index('\n')
-            doi_paragraph = t[start:end]
-            match = re.search(doi_reg, doi_paragraph)
-            if match:
-                return [match.group()]
-            else:
-                return []
-    else:
-        return []
-
-
-def get_pdf_head(text):
-    # Try to split it at the abstract.
-    lower = text.lower()
-    if 'abstract' in lower:
-        return text[:lower.index('abstract')]
-    # Otherwise grab the first 20 non-blank lines.
-    else:
-        return ''.join([i for i in text.split('\n') if i][:20])
-
-
-def entities_from_pdf(text):
-    text = get_pdf_head(text)
-    # Santize the text
-    text = re.sub(r'[^\x00-\x7F]+', u'', text)
-    tokens = nltk.word_tokenize(text)
-    tags = nltk.pos_tag(tokens)
-    ne = nltk.ne_chunk(tags)
-    p = [re.sub(entity_cleaning, '', tokens[i]) for i, v in enumerate(ne.pos()) if v[1] == 'PERSON']
-    people = list(unique_everseen(p))
-    o = [re.sub(entity_cleaning, '', tokens[i]) for i, v in enumerate(ne.pos()) if v[1] == 'ORGANIZATION']
-    orgs = list(unique_everseen(o))
-    return {'people':people, 'organizations':orgs}
 
 
 def extract_dois(soup):
@@ -111,7 +70,8 @@ def is_paper(url, terms):
     # If the link is to a homepage ('http://google.com/')
     # not a subdirectory ('http://google.com/papers')
     # then we will assume it is not a paper.
-    if not re.search(sub_directory, url):
+    # Also we will not follow self-links.
+    if (not re.search(sub_directory, url)) or 'nytimes.com' in url:
         return False
     else: 
         for t in terms:
@@ -179,7 +139,9 @@ def extract_pubmed_ids(soup):
 
 #     return result
 
-def parse_pdf(path):
+def parse_pdf(url):
+    path = '___tmp___.pdf'
+    call(['wget', '-O', path, url])
     xml = check_output(['curl','-s','--form','input=@'+path, grobid_uri])
     soup = BeautifulSoup(xml, 'xml')
     result = {'raw_parse':xml, 'authors':[], 'ids':[(i['type'],i.text.strip()) for i in soup.find_all('idno')]}
@@ -190,33 +152,39 @@ def parse_pdf(path):
         name = ' '.join([n.text.strip() for n in a.find('persName').find_all()])
         affil = {aff['type']: aff.text.strip() for aff in a.find('affiliation').find_all('orgName')}
         result['authors'].append((name, affil))
+    call(['rm', path])
     return result
 
 
+def scrape_nyt(url):
+    result = {'body':None, 'paper_links':[], 'error':None}
+    try:
+        soup = soupify(url)
+        result['body'] = extract_article_body(soup)
+        result['links'] = extract_links(soup, terms + domains)
+    except socket.error:
+        if tries > 3:
+            print '!!!Socket Error: ', url
+            result['error'] = 'socket_error'
+        else:
+            sleep(1)
+            result.update(process_pdf(url, tries + 1))
+    except urllib2.URLError:
+        print '!!!Bad URL: ', url
+        result['error'] = 'bad_url'
+    except ValueError:
+        print '!!!ValueError: ', url
+        result['error'] = 'value_error'
+    except httplib.BadStatusLine:
+        if tries > 3:
+            print '!!!Bad Status Line: ', url
+            result['error'] = 'bad_status_line'
+        else:
+            sleep(1)
+            result.update(process_pdf(url, tries + 1))
 
+    return result
 
-# def parse_pdf(path):
-#     # call grobid
-#     h = httplib.HTTPConnection('localhost:8080') 
-#     with open(path, 'rb') as f:
-#         data = urllib.urlencode({'input': f})
-#         headers = {"Content-Type":"multipart/form-data"}
-#         h.request('POST', '/processHeaderDocument', data, headers)
-#         #r = requests.post(grobid_uri, headers=headers, params={'input':f.read()})
-#         # if r.status_code == 200:
-#         #     return r.text
-#         # else:
-#         #     print "FAILURE - STATUS CODE: ", r.status_code
-#         #     return None
-#         r = h.getresponse()
-#         return r.read()
-
-
-
-def process_pdf(url, tries=0):
-    fname = url.split('/')[-1]
-    # Save the pdf to the disk
-    save_pdf(url, fname)
 
 
 
@@ -278,32 +246,36 @@ def process_media_article(url, tries=0):
 if __name__ == '__main__':
     import os
     import json
+    import csv
     import pprint
-    from PDF_scraping import pdf_from_url_to_txt
+
     printer = pprint.PrettyPrinter()
-    start = sorted(os.listdir('nyt_data')).index(sorted(os.listdir('nyt_processed'))[-1])
-    for p in sorted(os.listdir('nyt_data'))[start:]:
-        print 'Processing: \t', p, '\n\n'
-        path = os.path.join('nyt_data', p)
-        if os.path.isfile(path):
-            result = []
-            with open(path, 'rb') as f:
-                j = json.load(f)
-                docs = j['response']['docs']
+    
+    articles = []
+    l_index = 0
+    with open('nyt_processed/links.csv', 'wb') as link_file:
+        link_writer = csv.writer(link_file)
+        start = sorted(os.listdir('nyt_data')).index(sorted(os.listdir('nyt_processed'))[-1])
+        for p in sorted(os.listdir('nyt_data'))[start:]:
+            print 'Processing: \t', p, '\n\n'
+            path = os.path.join('nyt_data', p)
+            if os.path.isfile(path):
+                with open(path, 'rb') as f:
+                    j = json.load(f)
+                    if 'docs' in j['response']:
+                        docs = j['response']['docs']
+                        for d in docs:
+                            url = d['web_url']
+                            scrape = scrape_nyt(url)
+                            # Assign IDs to the links and write them to the file.
+                            cur_links = [[i + l_index, v] for i, v in enumerate(scrape['links'])]
+                            l_index += len(cur_links)
+                            for x in cur_links:
+                                link_writer.writerow(x)
+                            # Store the link IDs in the article metadata.
+                            scrape['link_ids'] = [x[0] for x in cur_links]
+                            # Store the article data.
+                            result.append(scrape)
 
-                for d in docs:
-                    url = d['web_url']
-                    proccessed = process_media_article(url)
-                    for l in proccessed['paper_links']:
-                        print l['link_text']
-                        print l['link_url']
-                        # if 'doi' in l:
-                        #     print '\tDOI: ', l['doi']
-                        if 'pubmed_id' in l:
-                            print '\tPM_ID: ', l['pubmed_id']
-                    proccessed.update(d)
-                    print 'Linked DOIs:\n', proccessed['linked_dois']
-                    result.append(proccessed)
-
-            with open(os.path.join('nyt_processed', p), 'wb') as f:
-                json.dump({'docs':result}, f)
+                        with open(os.path.join('nyt_processed', p), 'wb') as out_file:
+                            json.dump({'docs':result}, out_file)
