@@ -2,6 +2,8 @@ import requests
 import math
 import json
 import re
+import os
+from time import sleep
 from datetime import datetime
 from datetime import timedelta
 
@@ -42,27 +44,37 @@ while end_date > begin_date:
         if datetime.utcnow() - prev_time > wait_interval:
 
             if i <= 100:
-                # Update the URI page and send the request.
-                cur_uri = uri + "&page=" + str(i)
-                print 'Requesting page '+str(i)+'...'
-                r = requests.get(cur_uri)
-                req_count += 1
+                code = 0
+                tries = 0
+                # This while-loop allows us to retry
+                # up to three times if the connectoin fails.
+                while code != 200 and tries < 3:
+                    # Update the URI page and send the request.
+                    cur_uri = uri + "&page=" + str(i)
+                    print 'Requesting page '+str(i)+'...'
+                    r = requests.get(cur_uri)
+                    req_count += 1
+                    tries += 1
 
-                # Record the time at which we're making the request.
-                prev_time = datetime.utcnow()
+                    # Record the time at which we're making the request.
+                    prev_time = datetime.utcnow()
 
-                # If the request was successful save the data and
-                # increment the page number.
-                if r.status_code == 200:
-                    with open('nyt_data/page'+str(req_count)+'.json', 'wb') as f:
-                        json.dump(r.json(), f)
+                    code = r.status_code
+                    # If the request was successful save the data and
+                    # increment the page number.
+                    if code == 200:
+                        with open('__scrape_files__/nyt_pages/page'+str(req_count)+'.json', 'wb') as f:
+                            json.dump(r.json(), f)
 
-                    print 'Success!'
-                    prev_r = r
-                    i += 1
-                else:
-                    print '!!!FAILURE!!!'
-                    print 'Status Code: ', r.status_code
+                        print 'Success!'
+                        prev_r = r
+                        i += 1
+                    else:
+                        # If we failed, wait a second before trying again.
+                        print '!!!FAILURE!!!'
+                        print 'Status Code: ', r.status_code
+                        sleep(1)
+
             # If we've gotten to 100 pages, shift the end-date
             else:
                 # Get the final publication date for the most recent
@@ -75,4 +87,5 @@ while end_date > begin_date:
                 uri = re.sub(r'&begin_date=\d{8}', '&begin_date=' + new_param, uri)
                 i = 0
 
+print 'Collection Complete!'
 exit()

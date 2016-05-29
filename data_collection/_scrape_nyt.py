@@ -104,6 +104,40 @@ def extract_pubmed_ids(soup):
                     pm_ids.add(text)
     return list(pm_ids)
 
+# def process_pdf(url, tries=0):
+#     result = {}
+#     try:
+#         pdf_text = pdf_from_url_to_txt(url, maxpages=3)
+#         # Try to extract the doi.
+#         result['doi'] = doi_from_pdf(pdf_text)
+#         # Save the head of the document.
+#         result['head'] = get_pdf_head(pdf_text)
+#         result['entities'] = entities_from_pdf(pdf_text)
+#     except urllib2.HTTPError:
+#         print '!!! Broken Link:\n', url
+#         result['broken_link'] = True
+#         result['doi'] = []
+
+#     # This error happens sometimes and retrying works,
+#     # So try 3 times (each one second apart) before giving up.
+#     except pdfminer.pdfparser.PDFSyntaxError:
+#         if tries > 3:
+#             print '!!! Unreadable PDF\n', url
+#             result['unreadable_pdf'] = True
+#             result['doi'] = []
+#         else:
+#             sleep(1)
+#             result.update(process_pdf(url, tries + 1))
+#     except httplib.BadStatusLine:
+#         print '!!! Bad Status Line\n', url
+#         result['unreadable_pdf'] = True
+#         result['doi'] = []
+#     except:
+#         print '!!! Unknown Trouble Reading PDF\n', url
+#         result['unreadable_pdf'] = True
+#         result['doi'] = []
+
+#     return result
 
 def parse_pdf(url):
     path = '___tmp___.pdf'
@@ -150,6 +184,9 @@ def scrape_nyt(url):
             result.update(process_pdf(url, tries + 1))
 
     return result
+
+
+
 
 
 def process_media_article(url, tries=0):
@@ -214,7 +251,7 @@ if __name__ == '__main__':
 
     printer = pprint.PrettyPrinter()
     
-    articles = []
+    ### First get the links and body from each article.
     l_index = 0
     with open('nyt_processed/links.csv', 'wb') as link_file:
         link_writer = csv.writer(link_file)

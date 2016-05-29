@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 # Set some re-used values.
 sub_directory = re.compile(r'\..*/.+', re.IGNORECASE)
 terms = ['pubmed', '.gov', '.edu', 'doi', 'abstract', '.pdf']
-with open('journal_domains.csv', 'rb') as f:
+with open('__scrape_files__/journal_domains.csv', 'rb') as f:
     domains = f.read().split('\r\n')[:-1]
 
 
@@ -72,11 +72,13 @@ def scrape_nyt(url):
         else:
             sleep(1)
             result.update(process_pdf(url, tries + 1))
-    except urllib2.URLError:
+    except urllib2.URLError as e:
         print '!!!Bad URL: ', url
+        print e
         result['error'] = 'bad_url'
-    except ValueError:
+    except ValueError as e:
         print '!!!ValueError: ', url
+        print e
         result['error'] = 'value_error'
     except httplib.BadStatusLine:
         if tries > 3:
@@ -96,17 +98,15 @@ if __name__ == '__main__':
     import pprint
 
     printer = pprint.PrettyPrinter()
-    
-    ### First get the links and body from each article.
     l_index = 0
-    with open('nyt_links.csv', 'wb') as link_file:
+    with open('__scrape_files__/nyt_links.csv', 'wb') as link_file:
         link_writer = csv.writer(link_file)
         if len(os.listdir('nyt_processed')):
             start = sorted(os.listdir('nyt_data')).index(sorted(os.listdir('nyt_processed'))[-1])
         else:
             start = 0
 
-        for p in sorted(os.listdir('nyt_data'))[start:]:
+        for p in sorted(os.listdir('__scrape_files__/nyt_data'))[start:]:
             print 'Processing: \t', p, '\n\n'
             path = os.path.join('nyt_data', p)
             if os.path.isfile(path):
